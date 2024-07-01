@@ -1,6 +1,6 @@
 import { withSession } from "@/lib/auth";
 import { unsubscribe } from "@/lib/flodesk";
-import prisma from "@/lib/prisma";
+import { prisma } from "@/lib/prisma";
 import { storage } from "@/lib/storage";
 import { redis } from "@/lib/upstash";
 import { trim } from "@dub/utils";
@@ -9,6 +9,12 @@ import { z } from "zod";
 
 // GET /api/user – get a specific user
 export const GET = withSession(async ({ session }) => {
+  const user = await prisma.user.findUnique({
+    where: {
+      id: session.user.id,
+    },
+  });
+
   const migratedWorkspace = await redis.hget(
     "migrated_links_users",
     session.user.id,
@@ -19,7 +25,7 @@ export const GET = withSession(async ({ session }) => {
   }
 
   return NextResponse.json({
-    ...session.user,
+    ...user,
     migratedWorkspace,
   });
 });
@@ -28,13 +34,15 @@ const updateUserSchema = z.object({
   name: z.preprocess(trim, z.string().min(1).max(64)).optional(),
   email: z.preprocess(trim, z.string().email()).optional(),
   image: z.string().url().optional(),
+  source: z.preprocess(trim, z.string().min(1).max(32)).optional(),
+  defaultWorkspace: z.preprocess(trim, z.string().min(1)).optional(),
 });
 
-// PUT /api/user – edit a specific user
-export const PUT = withSession(async ({ req, session }) => {
-  let { name, email, image } = await updateUserSchema.parseAsync(
-    await req.json(),
-  );
+// PATCH /api/user – edit a specific user
+export const PATCH = withSession(async ({ req, session }) => {
+  let { name, email, image, source, defaultWorkspace } =
+    await updateUserSchema.parseAsync(await req.json());
+
   try {
     if (image) {
       const { url } = await storage.upload(`avatars/${session.user.id}`, image);
@@ -48,6 +56,8 @@ export const PUT = withSession(async ({ req, session }) => {
         ...(name && { name }),
         ...(email && { email }),
         ...(image && { image }),
+        ...(source && { source }),
+        ...(defaultWorkspace && { defaultWorkspace }),
       },
     });
     return NextResponse.json(response);
@@ -67,6 +77,8 @@ export const PUT = withSession(async ({ req, session }) => {
     return NextResponse.json({ error }, { status: 500 });
   }
 });
+
+export const PUT = PATCH;
 
 // DELETE /api/user – delete a specific user
 export const DELETE = withSession(async ({ session }) => {
